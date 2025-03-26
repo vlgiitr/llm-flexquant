@@ -1,13 +1,3 @@
-"""
-pyexample.
-
-An example python library.
-"""
-
-__version__ = "0.0.1"
-__author__ = 'VLG'
-__credits__ = 'VLG'
-
 from dataclasses import dataclass
 from typing import Optional, Iterator, Dict, List
 import json
