@@ -4,11 +4,11 @@ from typing_extensions import Literal
 import torch
 import numpy as np
 import random
+from ast import literal_eval
 
 from transformers import (
     AutoModelForCausalLM,
-    BitsAndBytesConfig,
-    logging
+    BitsAndBytesConfig
 )
 
 @dataclass
@@ -60,19 +60,19 @@ def generate_decoder_map():
 
 def generate_attention_map():
     attention_map = {
-        "llama": "model.layers.self_attn",
-        "gpt_neox": "gpt_neox.layers.self_attn",
-        "mistral": "model.layers.self_attn",
-        "mixtral": "model.layers.self_attn",
+        "llama": "self_attn",
+        "gpt_neox": "self_attn",
+        "mistral": "self_attn",
+        "mixtral": "self_attn",
     }
     return attention_map
 
 def generate_mlp_map():
     mlp_map = {
-        "llama": "model.layers.mlp",
-        "gpt_neox": "gpt_neox.layers.mlp",
-        "mistral": "model.layers.mlp",
-        "mixtral": "model.layers.mlp",
+        "llama": "mlp",
+        "gpt_neox": "mlp",
+        "mistral": "mlp",
+        "mixtral": "mlp",
     }
     return mlp_map
 
@@ -180,7 +180,8 @@ def quantize_attention_layers(
     except AttributeError as e:
         base_model_quant_config = None
 
-    decoder_map = generate_attention_map()
+    decoder_map = generate_decoder_map()
+    attn_mappping = generate_attention_map()[model_config.model_family]
 
     try:
         blocks = eval(f"model.{decoder_map[model_config.model_family]}")
@@ -236,7 +237,8 @@ def quantize_attention_layers(
         layer_change_positions = [i for i, j in enumerate(quant_config_str_list) if j == config_str]
 
         for position in layer_change_positions:
-            decoders_1[position] = decoders_2[position]
+            attn_1 = eval(f"decoders_1[position].{attn_mappping}")
+            attn_1 = eval(f"decoders_2[position].{attn_mappping}")
 
         del temp_model
         if 'cuda' in str(model.device):
@@ -259,7 +261,9 @@ def quantize_mlp_layers(
     except AttributeError as e:
         base_model_quant_config = None
 
-    decoder_map = generate_mlp_map()
+    # decoder_map = generate_mlp_map()
+    decoder_map = generate_decoder_map()
+    mlp_mapping = generate_mlp_map()[model_config.model_family]
 
     try:
         blocks = eval(f"model.{decoder_map[model_config.model_family]}")
@@ -314,8 +318,12 @@ def quantize_mlp_layers(
 
         layer_change_positions = [i for i, j in enumerate(quant_config_str_list) if j == config_str]
 
+        # x = literal_eval(f"{decoders_1[position]}.{mlp_mapping}")
+
+        
         for position in layer_change_positions:
-            decoders_1[position] = decoders_2[position]
+            mlp_1 = eval(f"decoders_1[position].{mlp_mapping}")
+            mlp_1 = eval(f"decoders_2[position].{mlp_mapping}")
 
         del temp_model
         if 'cuda' in str(model.device):
@@ -328,9 +336,8 @@ if __name__ == '__main__':
     ## example
 
     model = AutoModelForCausalLM.from_pretrained(
-        # pretrained_model_name_or_path="meta-llama/Llama-3.2-1B",
-        pretrained_model_name_or_path="mistralai/Mixtral-8x7B-Instruct-v0.1",
-        load_in_4bit = True,
+        pretrained_model_name_or_path="meta-llama/Llama-3.2-1B",
+        # load_in_4bit = True,
         device_map = "cuda:0"
     )
 
@@ -367,6 +374,4 @@ if __name__ == '__main__':
     model_configs = load_config(configs = model_config_list, config_type = "model")
 
     for model_config in model_configs:
-        updated_model = quantize_transformer_blocks(model = model, model_config = model_config, layerwise_config = layerwise_model_quant_config)
-
-    # print('meow')
+        updated_model = quantize_attention_layers(model = model, model_config = model_config, layerwise_config = layerwise_model_quant_config)
