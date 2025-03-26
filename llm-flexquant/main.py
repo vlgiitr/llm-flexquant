@@ -28,7 +28,6 @@ class ModelConfig:
 
 @dataclass
 class QuantConfig:
-    # base config
     load_in_4bit: Optional[bool]
     load_in_8bit: Optional[bool]
     bnb_4bit_use_double_quant: Optional[bool]
@@ -36,9 +35,6 @@ class QuantConfig:
     bnb_4bit_compute_dtype: Optional[torch.dtype]
     bnb_4bit_quant_type: Optional[str] = None  
     
-@dataclass
-class LayerConfig:
-    layer_quant_list: Optional[List[QuantConfig]]
 
 def create_dtype_map() -> Dict[str, torch.device]:
     mapping = {
@@ -53,13 +49,10 @@ def create_dtype_map() -> Dict[str, torch.device]:
     return dtype_map
 
 
-def load_config_from_json(
-    json_file: Path,
-    config_type: Literal["model", "quant", "layer_swap"]
+def load_config(
+    configs: Dict,
+    config_type: Literal["model", "quant"]
 ) -> Iterator[QuantConfig]:
-    print(json_file)
-    with open(json_file, "r", encoding="utf-8") as f:
-        configs = json.load(f)
     match config_type:
         case "model":
             for config in configs:
@@ -67,9 +60,6 @@ def load_config_from_json(
         case "quant":
             for config in configs:
                 yield QuantConfig(**config)
-        case "layer_swap":
-            for config in configs:
-                yield LayerSwapConfig(**config)
 
 def generate_decoder_map():
     decoder_map: Dict[str, str] = {
@@ -94,10 +84,10 @@ def set_seed(seed: int = 42):
 def quantize_transformer_blocks(
     model: AutoModelForCausalLM,
     model_config: ModelConfig,
-    layerwise_config: LayerConfig,
+    layerwise_config: List[QuantConfig],
     ):
     
-    if layerwise_config.layer_quant_list is None:
+    if layerwise_config is None:
         print("None layer-wise config given, returning the same model")
         return model
 
@@ -120,30 +110,30 @@ def quantize_transformer_blocks(
 
     for i, layer in enumerate(blocks):
         load_in = "fp32"
-        dtype = dtype_map[layerwise_config.layer_quant_list[i].bnb_4bit_compute_dtype]
-        if layerwise_config.layer_quant_list[i].load_in_4bit:
-            load_in = "4bit/" + layerwise_config.layer_quant_list[i].bnb_4bit_quant_type
-            if layerwise_config.layer_quant_list[i].bnb_4bit_use_double_quant:
+        dtype = dtype_map[layerwise_config[i].bnb_4bit_compute_dtype]
+        if layerwise_config[i].load_in_4bit:
+            load_in = "4bit/" + layerwise_config[i].bnb_4bit_quant_type
+            if layerwise_config[i].bnb_4bit_use_double_quant:
                 load_in += "/double"
             else:
                 load_in += "/single" 
 
-        elif layerwise_config.layer_quant_list[i].load_in_8bit:
+        elif layerwise_config[i].load_in_8bit:
             load_in = "8bit"
 
-        if layerwise_config.layer_quant_list[i].bnb_4bit_quant_type:
+        if layerwise_config[i].bnb_4bit_quant_type:
             layer_quant_config = BitsAndBytesConfig(
-                load_in_4bit = layerwise_config.layer_quant_list[i].load_in_4bit,
-                bnb_4bit_quant_type = layerwise_config.layer_quant_list[i].bnb_4bit_quant_type,
-                load_in_8bit = layerwise_config.layer_quant_list[i].load_in_8bit,
-                bnb_4bit_use_double_quant = layerwise_config.layer_quant_list[i].bnb_4bit_use_double_quant,
+                load_in_4bit = layerwise_config[i].load_in_4bit,
+                bnb_4bit_quant_type = layerwise_config[i].bnb_4bit_quant_type,
+                load_in_8bit = layerwise_config[i].load_in_8bit,
+                bnb_4bit_use_double_quant = layerwise_config[i].bnb_4bit_use_double_quant,
                 bnb_4bit_compute_dtype = dtype
             )
         else:
             layer_quant_config = BitsAndBytesConfig(
-                load_in_4bit = layerwise_config.layer_quant_list[i].load_in_4bit,
-                load_in_8bit = layerwise_config.layer_quant_list[i].load_in_8bit,
-                bnb_4bit_use_double_quant = layerwise_config.layer_quant_list[i].bnb_4bit_use_double_quant,
+                load_in_4bit = layerwise_config[i].load_in_4bit,
+                load_in_8bit = layerwise_config[i].load_in_8bit,
+                bnb_4bit_use_double_quant = layerwise_config[i].bnb_4bit_use_double_quant,
                 bnb_4bit_compute_dtype = dtype
             )
         print(layer_quant_config)
@@ -162,8 +152,44 @@ def quantize_mlp_layers():
     return 0 
 
 if __name__ == '__main__':
+
+    ## example
+
     model = AutoModelForCausalLM.from_pretrained(
         "meta-llama/Llama-3.2-1B",
-        device_map = "cpu"
+        # quantization_config = 
+        device_map = "cuda:0"
     )
-    print('meow')
+
+    model_config_list = [
+    {
+        "model_name": "meta-llama/Llama-3.2-1B",
+        "model_family": "llama",
+    }
+    ]
+
+    decoder_map = generate_decoder_map()
+
+    quant_config_list = [
+        {
+        "load_in_4bit": False,
+        "load_in_8bit": False,
+        "bnb_4bit_use_double_quant": False,
+        "bnb_4bit_quant_storage": "float16",
+        "bnb_4bit_compute_dtype": "float16"
+    }
+    ]*len(eval(f"model.{decoder_map[model_config_list[0]['model_family']]}"))
+    
+    layerwise_quant_configs = load_config(quant_config_list, config_type = "quant")
+
+    layerwise_model_quant_config = [] 
+
+    for qconfig in layerwise_quant_configs:
+        layerwise_model_quant_config.append(qconfig)
+
+    model_configs = load_config(configs = model_config_list, config_type = "model")
+
+    for model_config in model_configs:
+        updated_model = quantize_transformer_blocks(model = model, model_config = model_config, layerwise_config = layerwise_model_quant_config)
+
+    # print('meow')
