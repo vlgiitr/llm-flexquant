@@ -1,19 +1,9 @@
 from dataclasses import dataclass
 from typing import Optional, Iterator, Dict, List
-import json
-from pathlib import Path
-import gc
-import argparse
 from typing_extensions import Literal
-import warnings
-import inspect
-from tqdm import tqdm
 import torch
-import torch.nn as nn
 import numpy as np
 import random
-import pandas as pd
-import os
 
 from transformers import (
     AutoModelForCausalLM,
@@ -107,6 +97,7 @@ def quantize_transformer_blocks(
     dtype_map = create_dtype_map()
 
     quant_config_list = []
+    quant_config_str_list = []
 
     for i, layer in enumerate(blocks):
         load_in = "fp32"
@@ -136,10 +127,31 @@ def quantize_transformer_blocks(
                 bnb_4bit_use_double_quant = layerwise_config[i].bnb_4bit_use_double_quant,
                 bnb_4bit_compute_dtype = dtype
             )
-        print(layer_quant_config)
-        exit()
-        # quant_config_list.append(str())
-  
+        quant_config_list.append(layer_quant_config)
+        quant_config_str_list.append(str(layer_quant_config))
+
+    unique_configs = set(quant_config_str_list)
+    
+    for config in unique_configs:
+        temp_model = AutoModelForCausalLM.from_pretrained(
+            pretrained_model_name_or_path=model_config.model_name,
+            quantization_config = quant_config_list[quant_config_str_list.index(config)],
+            device_map = model.device
+        )
+        try:
+            decoders_1 = eval(f"model.{DecoderMap[model_config.model_family]}")
+            decoders_2 = eval(f"temp_model.{DecoderMap[model_config.model_family]}")
+        except AttributeError as e:
+            raise ValueError(f"Unsupported model family '{model_config.model_family}' or invalid layer attribute: {e}")
+
+        layer_change_positions = [i for i, j in enumerate(quant_config_str_list) if j == config]
+
+        
+
+        
+
+    return 0
+      
 
     
 def quantize_attention_layers(
@@ -156,9 +168,10 @@ if __name__ == '__main__':
     ## example
 
     model = AutoModelForCausalLM.from_pretrained(
-        "meta-llama/Llama-3.2-1B",
+        pretrained_model_name_or_path="meta-llama/Llama-3.2-1B",
         # quantization_config = 
-        device_map = "cuda:0"
+        # device_map = "cuda:0"
+        device_map = "cpu"
     )
 
     model_config_list = [
